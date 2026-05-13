@@ -1,4 +1,4 @@
-browser-use
+browser-use[video]
 python-dotenv
 pyvirtualdisplay
 playwright
