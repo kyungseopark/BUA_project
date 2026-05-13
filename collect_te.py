@@ -31,71 +31,6 @@ def _sec_to_srt(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-class GIFRecorder:
-    """브라우저 스크린샷 기반 GIF 녹화기 (headless 환경용)"""
-
-    def __init__(self, output_path: str, interval: float = 2.0):
-        self.output_path = output_path
-        self.interval = interval
-        self._frames: list[bytes] = []
-        self._task: asyncio.Task | None = None
-        self._running = False
-        self._browser_session = None
-        self.start_time: float | None = None
-
-    def set_browser(self, browser_session):
-        self._browser_session = browser_session
-
-    async def start(self):
-        self.start_time = time.time()
-        self._running = True
-        self._frames = []
-        self._task = asyncio.create_task(self._capture_loop())
-
-    async def _capture_loop(self):
-        while self._running:
-            try:
-                page = await self._browser_session.get_current_page()
-                screenshot = await page.screenshot(type="png")
-                self._frames.append(screenshot)
-            except Exception:
-                pass
-            await asyncio.sleep(self.interval)
-
-    async def stop(self) -> float:
-        duration = time.time() - (self.start_time or time.time())
-        self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        self._save_gif()
-        return duration
-
-    def _save_gif(self):
-        if not self._frames:
-            print("⚠️  GIF 저장 실패: 프레임 없음")
-            return
-        try:
-            from PIL import Image
-            import io
-            images = []
-            for frame_bytes in self._frames:
-                img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
-                img = img.resize((1280, 800), Image.LANCZOS)
-                images.append(img.convert("P", palette=Image.ADAPTIVE, colors=128))
-            images[0].save(
-                self.output_path,
-                save_all=True,
-                append_images=images[1:],
-                loop=0,
-                duration=int(self.interval * 1000),
-                optimize=False,
-            )
-        except Exception as e:
-            print(f"⚠️  GIF 저장 실패: {e}")
 
 
 class SubtitleLogger:
@@ -247,15 +182,13 @@ async def auto_login(browser_session: BrowserSession):
     except Exception as e:
         print(f"⚠️ 로그인 프로세스 실패: {e}")
 
-async def run_task(task_index: int, task: str, browser_session: BrowserSession, model_name: str,
-                   recorder: GIFRecorder | None = None):
+async def run_task(task_index: int, task: str, browser_session: BrowserSession, model_name: str):
     # 💡 태스크별 개별 jsonl 경로 설정 (덮어쓰기 모드)
     task_log_path = f"./data/{SAVE_DIR_NAME}/training_data/task_{task_index:03d}.jsonl"
     if os.path.exists(task_log_path):
         os.remove(task_log_path)
 
     conv_path = f"./data/{SAVE_DIR_NAME}/conversations/task_{task_index:03d}.json"
-    gif_path = f"./data/{SAVE_DIR_NAME}/videos/task_{task_index:03d}.gif"
     srt_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}.srt"
     events_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}_events.json"
 
@@ -273,13 +206,6 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
 
     full_task = f"{BASE_CONTEXT}\n요청사항: {task}"
     task_start_time = time.time()
-
-    # 녹화 시작
-    if recorder is None:
-        recorder = GIFRecorder(output_path=gif_path)
-    recorder.output_path = gif_path
-    recorder.set_browser(browser_session)
-    await recorder.start()
     sub_logger = SubtitleLogger(task_index, task, task_start_time)
 
     agent = LoggedAgent(
@@ -296,7 +222,7 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
     )
 
     result = {"model": model_name, "task_index": task_index, "task": task, "success": None,
-              "gif": gif_path, "srt": srt_path}
+              "video": None, "srt": srt_path}
 
     try:
         history = await agent.run(max_steps=MAX_STEPS)
@@ -317,21 +243,19 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         print(f"에러: {e}")
 
     finally:
-        duration = await recorder.stop()
+        duration = round(time.time() - task_start_time, 1)
         sub_logger.save(
             json_path=events_path,
             srt_path=srt_path,
             total_duration=duration,
         )
-        print(f"🎥 GIF 저장: {gif_path} ({duration:.1f}s) | 자막: {srt_path}")
+        print(f"자막: {srt_path} ({duration}s)")
 
     return result
 
 
 async def main():
     model_name = sys.argv[1] if len(sys.argv) > 1 else "gemini"
-
-    vdisplay = None
 
     # 폴더 구조 생성
     base_dirs = [
@@ -378,18 +302,38 @@ async def main():
         # 97번부터 순회 시작
         for i, task in list(enumerate(ALL_TASKS))[start:end]:
             print(f"▶️ 준비 중: Task {i} 세션 초기화...")
-            
+
+            video_tmp_dir = os.path.abspath(f"./data/{SAVE_DIR_NAME}/videos/task_{i:03d}_tmp")
+            os.makedirs(video_tmp_dir, exist_ok=True)
+
             browser_session = BrowserSession(
-                browser_profile=BrowserProfile(headless=True, downloads_path=download_path),
-                keep_alive=False, # 태스크 종료 시 브라우저 닫기
+                browser_profile=BrowserProfile(
+                    headless=True,
+                    downloads_path=download_path,
+                    record_video_dir=video_tmp_dir,
+                    record_video_size={"width": 1280, "height": 720},
+                ),
+                keep_alive=False,
             )
             await browser_session.start()
             await auto_login(browser_session)
-            
-            result = await run_task(i, task, browser_session, model_name, recorder=None)
+
+            result = await run_task(i, task, browser_session, model_name)
             all_results.append(result)
-            
-            await browser_session.stop() 
+
+            await browser_session.stop()
+
+            # 녹화된 webm 파일 rename
+            webm_files = glob.glob(f"{video_tmp_dir}/*.webm")
+            if webm_files:
+                final_video = f"./data/{SAVE_DIR_NAME}/videos/task_{i:03d}.webm"
+                os.rename(webm_files[0], final_video)
+                os.rmdir(video_tmp_dir)
+                result["video"] = final_video
+                print(f"🎥 비디오 저장: {final_video}")
+            else:
+                print(f"⚠️  비디오 파일 없음 (task {i})")
+
             await asyncio.sleep(SLEEP_BETWEEN_TASKS)
 
             # 10개마다 중간 저장
@@ -409,9 +353,6 @@ async def main():
     with open(final_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
     print(f"✅ 수집 세션 종료. 최종 결과 저장됨: {final_path}")
-
-    if vdisplay:
-        vdisplay.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
