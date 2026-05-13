@@ -6,8 +6,13 @@ from browser_use.llm.messages import BaseMessage
 from browser_use.agent.views import AgentOutput
 
 class LoggedAgent(Agent):
-    def __init__(self, *args, log_path="training_data.jsonl", task_index=None, sub_logger=None, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, *args, log_path="training_data.jsonl", task_index=None, sub_logger=None,
+                 gif_show_goals=True, gif_font_size=16, **kwargs):
+        # generate_gif를 가로채서 직접 관리 (폰트 크기 제어 목적)
+        self._gif_path = kwargs.pop("generate_gif", False)
+        self._gif_show_goals = gif_show_goals
+        self._gif_font_size = gif_font_size
+        super().__init__(*args, generate_gif=False, **kwargs)
         self.log_path = log_path
         self.task_index = task_index
         self.sub_logger = sub_logger
@@ -68,6 +73,24 @@ class LoggedAgent(Agent):
             self._pending_logs = []
             self._step_counter = 0
             self._step_start_time = None
+
+    async def run(self, *args, **kwargs):
+        history = await super().run(*args, **kwargs)
+        if self._gif_path and history.history:
+            try:
+                from browser_use.agent.gif import create_history_gif
+                create_history_gif(
+                    task=self.task,
+                    history=history,
+                    output_path=self._gif_path,
+                    show_goals=self._gif_show_goals,
+                    font_size=self._gif_font_size,
+                    title_font_size=int(self._gif_font_size * 1.25),
+                    goal_font_size=int(self._gif_font_size * 1.1),
+                )
+            except Exception as e:
+                self.logger.warning(f"GIF 생성 실패: {e}")
+        return history
 
     async def get_model_output(self, input_messages):
         parsed = await super().get_model_output(input_messages)
