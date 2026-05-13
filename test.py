@@ -337,6 +337,7 @@ async def main():
                 browser_profile=BrowserProfile(
                     headless=True,
                     downloads_path=download_path,
+                    proxy={"server": "socks5://localhost:8080"},
                     args=[
                         "--disable-dev-shm-usage",
                         "--no-sandbox",
