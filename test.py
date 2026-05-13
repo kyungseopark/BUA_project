@@ -225,7 +225,7 @@ MODELS = {
 # 💡 치명적 수정: 로컬 VLM도 반드시 Vision을 True로 설정해야 화면을 읽습니다!
 USE_VISION = {
     "qwen_base": True,
-    "qwen_bua": False,
+    "qwen_bua": True,
 }
 
 async def auto_login(browser_session: BrowserSession):
@@ -341,8 +341,6 @@ async def main():
                     args=[
                         "--disable-dev-shm-usage",
                         "--no-sandbox",
-                        "--disable-gpu",
-                        "--disable-software-rasterizer",
                     ],
                 ),
                 keep_alive=False,
