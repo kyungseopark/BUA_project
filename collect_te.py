@@ -334,6 +334,8 @@ async def main():
             await browser_session.stop()
 
             # 녹화된 webm 파일 rename
+            all_files = os.listdir(video_tmp_dir) if os.path.exists(video_tmp_dir) else []
+            print(f"[debug] tmp dir 파일 목록: {all_files}")
             webm_files = glob.glob(f"{video_tmp_dir}/*.webm")
             if webm_files:
                 final_video = f"./data/{SAVE_DIR_NAME}/videos/task_{i:03d}.webm"
