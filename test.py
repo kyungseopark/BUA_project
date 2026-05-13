@@ -9,6 +9,52 @@ from browser_use import BrowserSession, BrowserProfile, ChatBrowserUse, ChatOpen
 from logged_agent import LoggedAgent
 from dotenv import load_dotenv
 
+
+def _sec_to_srt(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+class SubtitleLogger:
+    def __init__(self, task_index: int, task: str, start_time: float):
+        self.task_index = task_index
+        self.task = task
+        self.start_time = start_time
+        self.events: list[dict] = []
+        self._add(0.0, "task_start", f"[Task {task_index}] {task}")
+
+    def _elapsed(self) -> float:
+        return time.time() - self.start_time
+
+    def _add(self, elapsed: float, event_type: str, text: str, **extra):
+        self.events.append({"time": round(elapsed, 3), "type": event_type, "text": text, **extra})
+
+    def log_step(self, step: int, text: str):
+        self._add(self._elapsed(), "step", f"[Step {step}] {text}", step=step)
+
+    def log_done(self, success: bool, steps: int):
+        status = "성공" if success else "실패"
+        self._add(self._elapsed(), "task_end", f"[완료] {status} ({steps}단계)")
+
+    def _build_srt_from_events(self) -> str:
+        lines: list[str] = []
+        for i, ev in enumerate(self.events):
+            t_start = ev["time"]
+            t_end = self.events[i + 1]["time"] if i + 1 < len(self.events) else t_start + 5.0
+            lines += [str(i + 1), f"{_sec_to_srt(t_start)} --> {_sec_to_srt(t_end)}", ev["text"], ""]
+        return "\n".join(lines)
+
+    def save(self, json_path: str, srt_path: str, total_duration: float = 0.0):
+        data = {"task_index": self.task_index, "task": self.task,
+                "events": self.events, "total_duration": round(total_duration, 3)}
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(self._build_srt_from_events())
+
 # ==========================================
 # 1. 시스템 프롬프트 (숏컷 및 HINT 완벽 제거)
 # ==========================================
@@ -207,11 +253,16 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
     task_log_path = f"./data/{SAVE_DIR_NAME}/training_data/task_{task_index:03d}.jsonl"
     if os.path.exists(task_log_path):
         os.remove(task_log_path)
-    
+
+    gif_path = f"./data/{SAVE_DIR_NAME}/gifs/task_{task_index:03d}.gif"
+    srt_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}.srt"
+    events_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}_events.json"
+
     # 💡 숏컷 주입 로직 전면 삭제. 오직 프롬프트와 화면에만 의존하여 추론 (Method Acting)
     extend_msg = EXTEND_SYSTEM_MESSAGE
     full_task = f"{BASE_CONTEXT}\n요청사항: {task}"
     task_start_time = time.time()
+    sub_logger = SubtitleLogger(task_index, task, task_start_time)
 
     agent = LoggedAgent(
         task=full_task,
@@ -223,6 +274,8 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         task_index=task_index,
         browser=browser_session,
         save_conversation_path=f"./data/{SAVE_DIR_NAME}/conversations/task_{task_index:03d}.json",
+        generate_gif=gif_path,
+        sub_logger=sub_logger,
     )
 
     result = {"model": model_name, "task_index": task_index, "task": task, "success": None}
@@ -235,14 +288,23 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         result["steps"] = history.number_of_steps()
         result["final_answer"] = history.final_result() # 💡 논문 기록을 위해 최종 반환값 추가
         result["total_time_seconds"] = round(time.time() - task_start_time, 2)
+        sub_logger.log_done(result["success"], result["steps"])
         print(f"결과: {'성공' if result['success'] else '실패'} ({result['steps']} steps)")
+        if os.path.exists(gif_path):
+            print(f"🎞️  GIF 저장: {gif_path}")
 
     except Exception as e:
         agent.flush_logs(success=False)
         result["success"] = False
         result["error"] = str(e)
         result["total_time_seconds"] = round(time.time() - task_start_time, 2)
+        sub_logger.log_done(False, 0)
         print(f"에러: {e}")
+
+    finally:
+        duration = round(time.time() - task_start_time, 1)
+        sub_logger.save(json_path=events_path, srt_path=srt_path, total_duration=duration)
+        print(f"자막: {srt_path} ({duration}s)")
 
     return result
 
@@ -253,7 +315,9 @@ async def main():
     base_dirs = [
         f"./data/{SAVE_DIR_NAME}/conversations",
         f"./data/{SAVE_DIR_NAME}/results",
-        f"./data/{SAVE_DIR_NAME}/training_data"
+        f"./data/{SAVE_DIR_NAME}/training_data",
+        f"./data/{SAVE_DIR_NAME}/gifs",
+        f"./data/{SAVE_DIR_NAME}/subtitles",
     ]
     for d in base_dirs: os.makedirs(d, exist_ok=True)
 
