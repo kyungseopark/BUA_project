@@ -99,7 +99,7 @@ BASE_CONTEXT = "통합정보시스템을 클릭하고 열리는 탭으로 전환
 # ==========================================
 MAX_STEPS = 20 # 평가 시 너무 무한루프 돌지 않게 20으로 단축
 SLEEP_BETWEEN_TASKS = 3
-VLLM_BASE_URL = "https://cl1.gpuhub.nhncloud.com/api/v1/" # 💡
+VLLM_BASE_URL = "http://localhost:8000/v1"
 SAVE_DIR_NAME = "eval_run" # 평가 로그 저장 폴더명
 
 CNU_ID = os.getenv("CNU_ID", "본인학번")
@@ -215,7 +215,7 @@ MODELS = {
         temperature=0.0
     ),
     "qwen_bua": ChatOpenAI(
-        model="./output/merged_cnu_agent_vision", 
+        model="cnu-agent-vision",
         base_url=VLLM_BASE_URL,
         api_key="dummy",
         temperature=0.0
