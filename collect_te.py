@@ -160,27 +160,37 @@ USE_VISION = {
     "qwen_bua": False,
 }
 
-async def auto_login(browser_session: BrowserSession):
-    """태스크별 독립적인 로그인을 수행하여 세션 오염 방지"""
-    try:
-        await browser_session.navigate_to("https://portal.cnu.ac.kr/login.jsp")
-        await asyncio.sleep(5)
-        bu_page = await browser_session.get_current_page()
-        print("아이디/비번 자동 입력 중...")
-        await bu_page.evaluate(
-            f"(...args) => {{ document.querySelector(\"input[name='user_id']\").value = '{CNU_ID}'; }}"
-        )
-        await asyncio.sleep(0.5)
-        await bu_page.evaluate(
-            f"(...args) => {{ document.querySelector(\"input[name='user_password']\").value = '{CNU_PW}'; }}"
-        )
-        await asyncio.sleep(2)
-        await bu_page.press("Enter")
+async def auto_login(browser_session: BrowserSession, max_retries: int = 3):
+    """태스크별 독립적인 로그인을 수행하여 세션 오염 방지 (최대 max_retries회 재시도)"""
+    for attempt in range(1, max_retries + 1):
+        try:
+            await browser_session.navigate_to("https://portal.cnu.ac.kr/login.jsp")
+            await asyncio.sleep(5)
+            bu_page = await browser_session.get_current_page()
+            print(f"아이디/비번 자동 입력 중... (시도 {attempt}/{max_retries})")
+            await bu_page.evaluate(
+                f"(...args) => {{ document.querySelector(\"input[name='user_id']\").value = '{CNU_ID}'; }}"
+            )
+            await asyncio.sleep(0.5)
+            await bu_page.evaluate(
+                f"(...args) => {{ document.querySelector(\"input[name='user_password']\").value = '{CNU_PW}'; }}"
+            )
+            await asyncio.sleep(2)
+            await bu_page.press("Enter")
+            await asyncio.sleep(3)
 
-        await asyncio.sleep(3)
-        print("✅ 자동 로그인 및 통합정보시스템 진입 완료")
-    except Exception as e:
-        print(f"⚠️ 로그인 프로세스 실패: {e}")
+            # 로그인 성공 여부 확인 (login.jsp에 머물면 실패)
+            current_url = bu_page.url
+            if "login.jsp" not in current_url:
+                print("✅ 자동 로그인 완료")
+                return
+            print(f"⚠️ 로그인 실패 (URL: {current_url}), 재시도 중...")
+        except Exception as e:
+            print(f"⚠️ 로그인 프로세스 오류 (시도 {attempt}/{max_retries}): {e}")
+
+        await asyncio.sleep(2)
+
+    print("❌ 로그인 최대 재시도 횟수 초과")
 
 async def run_task(task_index: int, task: str, browser_session: BrowserSession, model_name: str):
     # 💡 태스크별 개별 jsonl 경로 설정 (덮어쓰기 모드)
