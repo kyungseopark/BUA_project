@@ -232,7 +232,7 @@ async def auto_login(browser_session: BrowserSession):
     # 기존 코드 동일 유지 (안정성 검증됨)
     try:
         await browser_session.navigate_to("https://portal.cnu.ac.kr/login.jsp")
-        await asyncio.sleep(5)
+        await asyncio.sleep(10)
         bu_page = await browser_session.get_current_page()
         print("아이디/비번 자동 입력 중...")
         await bu_page.evaluate(
@@ -321,8 +321,8 @@ async def main():
     ]
     for d in base_dirs: os.makedirs(d, exist_ok=True)
 
-    start = 0
-    end = len(EVAL_TASKS)
+    start = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    end = int(sys.argv[3]) if len(sys.argv) > 3 else start + 1
     all_results = []
     download_path = os.path.abspath(f"./data/{SAVE_DIR_NAME}/downloads")
     os.makedirs(download_path, exist_ok=True)
