@@ -9,14 +9,7 @@ from browser_use import BrowserSession, BrowserProfile, ChatBrowserUse, ChatOpen
 from logged_agent import LoggedAgent
 from dotenv import load_dotenv
 
-from tasks.cnu_tasks import ALL_TASKS, TASK_CATEGORIES, ALL_SHORTCUTS
-
-try:
-    from pyvirtualdisplay import Display as VirtualDisplay
-    HAS_VIRTUAL_DISPLAY = True
-except ImportError:
-    HAS_VIRTUAL_DISPLAY = False
-    print("⚠️  pyvirtualdisplay 없음 — 기존 DISPLAY 환경변수 사용")
+from tasks.cnu_tasks import ALL_TASKS, ALL_SHORTCUTS
 
 load_dotenv()
 CNU_ID = os.getenv("CNU_ID")
