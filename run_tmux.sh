@@ -22,6 +22,8 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     fi
 fi
 
+mkdir -p ./data/logs
+
 tmux new-session -d -s "$SESSION"
 tmux send-keys -t "$SESSION" "cd $(pwd) && DISPLAY=$DISPLAY_NUM python test.py $MODEL $START $END 2>&1 | tee ./data/logs/${SESSION}.log" Enter
 
