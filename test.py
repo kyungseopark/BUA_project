@@ -334,8 +334,8 @@ async def main():
             print(f"▶️ 평가 중: Task {i} - {task}")
             
             browser_session = BrowserSession(
-                browser_profile=BrowserProfile(headless=False, downloads_path=download_path),
-                keep_alive=False, 
+                browser_profile=BrowserProfile(headless=True, downloads_path=download_path),
+                keep_alive=False,
             )
             await browser_session.start()
             await auto_login(browser_session)
