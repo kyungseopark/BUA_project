@@ -219,14 +219,13 @@ MODELS = {
         base_url=VLLM_BASE_URL,
         api_key="dummy",
         temperature=0.0,
-        max_tokens=1024,
     ),
 }
 
 # 💡 치명적 수정: 로컬 VLM도 반드시 Vision을 True로 설정해야 화면을 읽습니다!
 USE_VISION = {
     "qwen_base": True,
-    "qwen_bua": False,  # 스크린샷 타임아웃 방지 + 텍스트 전용 추론
+    "qwen_bua": False,
 }
 
 async def auto_login(browser_session: BrowserSession):
