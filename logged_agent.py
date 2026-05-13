@@ -6,10 +6,11 @@ from browser_use.llm.messages import BaseMessage
 from browser_use.agent.views import AgentOutput
 
 class LoggedAgent(Agent):
-    def __init__(self, *args, log_path="training_data.jsonl", task_index=None, **kwargs):
+    def __init__(self, *args, log_path="training_data.jsonl", task_index=None, sub_logger=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.log_path = log_path
         self.task_index = task_index
+        self.sub_logger = sub_logger
         self._pending_logs = []
         self._step_counter = 0
         self._step_start_time = None
@@ -17,13 +18,29 @@ class LoggedAgent(Agent):
     def _log_training_data(self, input_messages: list[BaseMessage], parsed: AgentOutput):
         try:
             self._step_counter += 1
-            
+
             # 스텝 소요 시간 계산
             step_time = None
             if self._step_start_time:
                 step_time = round(time.time() - self._step_start_time, 2)
             self._step_start_time = time.time()
-            
+
+            # 자막 실시간 기록
+            if self.sub_logger:
+                try:
+                    text = ""
+                    if hasattr(parsed, "current_state") and parsed.current_state:
+                        cs = parsed.current_state
+                        text = (
+                            getattr(cs, "next_goal", "") or
+                            getattr(cs, "thought", "") or
+                            getattr(cs, "memory", "") or ""
+                        )
+                    if text:
+                        self.sub_logger.log_step(self._step_counter, text[:120])
+                except Exception:
+                    pass
+
             data = {
                 "task_index": self.task_index,
                 "step_number": self._step_counter,

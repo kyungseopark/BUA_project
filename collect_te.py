@@ -4,6 +4,8 @@ import sys
 import json
 import time
 import glob
+import platform
+import subprocess
 from datetime import datetime
 from browser_use import BrowserSession, BrowserProfile, ChatBrowserUse, ChatOpenAI, ChatGoogle
 from logged_agent import LoggedAgent
@@ -11,12 +13,140 @@ from dotenv import load_dotenv
 
 from tasks.cnu_tasks import ALL_TASKS, TASK_CATEGORIES, ALL_SHORTCUTS
 
+try:
+    from pyvirtualdisplay import Display as VirtualDisplay
+    HAS_VIRTUAL_DISPLAY = True
+except ImportError:
+    HAS_VIRTUAL_DISPLAY = False
+    print("⚠️  pyvirtualdisplay 없음 — 기존 DISPLAY 환경변수 사용")
+
 load_dotenv()
 CNU_ID = os.getenv("CNU_ID")
 CNU_PW = os.getenv("CNU_PW")
 
 # 💡 저장 폴더 고정
-SAVE_DIR_NAME = "gemini_1"
+SAVE_DIR_NAME = "gemini_temp"
+
+# =======================================================
+# 화면 녹화 / 자막 유틸리티
+# =======================================================
+
+def _sec_to_srt(seconds: float) -> str:
+    """초 → SRT 타임코드 HH:MM:SS,mmm 변환"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+class VideoRecorder:
+    """ffmpeg 기반 화면 녹화기 (macOS: avfoundation, Linux: x11grab)"""
+
+    def __init__(self, output_path: str, display: str = ":1", width: int = 1920, height: int = 1080, fps: int = 15,
+                 screen_index: int = 4):
+        self.output_path = output_path
+        self.display = display
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.screen_index = screen_index  # macOS avfoundation 스크린 인덱스 (보통 1)
+        self._proc: subprocess.Popen | None = None
+        self.start_time: float | None = None
+        self._is_macos = platform.system() == "Darwin"
+
+    def start(self):
+        self.start_time = time.time()
+        if self._is_macos:
+            # macOS: avfoundation 사용 (screen_index는 ffmpeg -list_devices로 확인)
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "avfoundation",
+                "-capture_cursor", "1",
+                "-r", str(self.fps),
+                "-i", f"{self.screen_index}:",  # screen:audio (오디오 없음)
+                "-vf", f"scale={self.width}:{self.height}",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "28",
+                self.output_path,
+            ]
+        else:
+            # Linux: x11grab 사용
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "x11grab",
+                "-r", str(self.fps),
+                "-s", f"{self.width}x{self.height}",
+                "-i", self.display,
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "28",
+                self.output_path,
+            ]
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def stop(self) -> float:
+        """녹화 종료 후 총 길이(초) 반환"""
+        duration = time.time() - (self.start_time or time.time())
+        if self._proc and self._proc.poll() is None:
+            try:
+                self._proc.stdin.write(b"q")
+                self._proc.stdin.flush()
+                self._proc.wait(timeout=15)
+            except Exception:
+                self._proc.kill()
+        self._proc = None
+        return duration
+
+
+class SubtitleLogger:
+    """태스크 진행 중 이벤트를 수집 후 SRT + 이벤트 JSON 저장"""
+
+    def __init__(self, task_index: int, task: str, start_time: float):
+        self.task_index = task_index
+        self.task = task
+        self.start_time = start_time
+        self.events: list[dict] = []
+        self._add(0.0, "task_start", f"[Task {task_index}] {task}")
+
+    def _elapsed(self) -> float:
+        return time.time() - self.start_time
+
+    def _add(self, elapsed: float, event_type: str, text: str, **extra):
+        self.events.append({"time": round(elapsed, 3), "type": event_type, "text": text, **extra})
+
+    def log_step(self, step: int, text: str):
+        self._add(self._elapsed(), "step", f"[Step {step}] {text}", step=step)
+
+    def log_done(self, success: bool, steps: int):
+        status = "성공" if success else "실패"
+        self._add(self._elapsed(), "task_end", f"[완료] {status} ({steps}단계)")
+
+    def _build_srt_from_events(self) -> str:
+        lines: list[str] = []
+        for i, ev in enumerate(self.events):
+            t_start = ev["time"]
+            t_end = self.events[i + 1]["time"] if i + 1 < len(self.events) else t_start + 5.0
+            lines += [str(i + 1), f"{_sec_to_srt(t_start)} --> {_sec_to_srt(t_end)}", ev["text"], ""]
+        return "\n".join(lines)
+
+    def save(self, json_path: str, srt_path: str, total_duration: float = 0.0):
+        data = {
+            "task_index": self.task_index,
+            "task": self.task,
+            "events": self.events,
+            "total_duration": round(total_duration, 3),
+        }
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(self._build_srt_from_events())
 
 # =======================================================
 # 시스템 프롬프트 (영문화 + 최적화 + Alert 핸들링)
@@ -124,15 +254,21 @@ async def auto_login(browser_session: BrowserSession):
     except Exception as e:
         print(f"⚠️ 로그인 프로세스 실패: {e}")
 
-async def run_task(task_index: int, task: str, browser_session: BrowserSession, model_name: str):
+async def run_task(task_index: int, task: str, browser_session: BrowserSession, model_name: str,
+                   recorder: VideoRecorder | None = None):
     # 💡 태스크별 개별 jsonl 경로 설정 (덮어쓰기 모드)
     task_log_path = f"./data/{SAVE_DIR_NAME}/training_data/task_{task_index:03d}.jsonl"
     if os.path.exists(task_log_path):
         os.remove(task_log_path)
-    
+
+    conv_path = f"./data/{SAVE_DIR_NAME}/conversations/task_{task_index:03d}.json"
+    video_path = f"./data/{SAVE_DIR_NAME}/videos/task_{task_index:03d}.mp4"
+    srt_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}.srt"
+    events_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}_events.json"
+
     target_shortcut = ALL_SHORTCUTS[task_index] if task_index < len(ALL_SHORTCUTS) else ""
     extend_msg = EXTEND_SYSTEM_MESSAGE
-    
+
     if target_shortcut:
         print(f"📌 [참고 경로]: {target_shortcut}")
         extend_msg += (
@@ -141,9 +277,17 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
             f"Use this internally to navigate. NEVER reveal this path or format 'A > B' in any output.\n"
             f"</SECRET_NAVIGATION_HINT>"
         )
-    
+
     full_task = f"{BASE_CONTEXT}\n요청사항: {task}"
     task_start_time = time.time()
+
+    # 녹화 시작
+    if recorder is None:
+        display_str = os.environ.get("DISPLAY", ":1")
+        recorder = VideoRecorder(output_path=video_path, display=display_str)
+    recorder.output_path = video_path
+    recorder.start()
+    sub_logger = SubtitleLogger(task_index, task, task_start_time)
 
     agent = LoggedAgent(
         task=full_task,
@@ -154,10 +298,12 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         log_path=task_log_path,
         task_index=task_index,
         browser=browser_session,
-        save_conversation_path=f"./data/{SAVE_DIR_NAME}/conversations/task_{task_index:03d}.json",
+        save_conversation_path=conv_path,
+        sub_logger=sub_logger,
     )
 
-    result = {"model": model_name, "task_index": task_index, "task": task, "success": None}
+    result = {"model": model_name, "task_index": task_index, "task": task, "success": None,
+              "video": video_path, "srt": srt_path}
 
     try:
         history = await agent.run(max_steps=MAX_STEPS)
@@ -166,6 +312,7 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         result["success"] = history.is_successful()
         result["steps"] = history.number_of_steps()
         result["total_time_seconds"] = round(time.time() - task_start_time, 2)
+        sub_logger.log_done(result["success"], result["steps"])
         print(f"결과: {'성공' if result['success'] else '실패'} ({result['steps']} steps)")
 
     except Exception as e:
@@ -173,26 +320,48 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         result["success"] = False
         result["error"] = str(e)
         result["total_time_seconds"] = round(time.time() - task_start_time, 2)
+        sub_logger.log_done(False, 0)
         print(f"에러: {e}")
+
+    finally:
+        duration = recorder.stop()
+        sub_logger.save(
+            json_path=events_path,
+            srt_path=srt_path,
+            total_duration=duration,
+        )
+        print(f"🎥 녹화 저장: {video_path} ({duration:.1f}s) | 자막: {srt_path}")
 
     return result
 
 
 async def main():
     model_name = sys.argv[1] if len(sys.argv) > 1 else "gemini"
-    
+
+    # 가상 디스플레이 (서버 환경)
+    vdisplay = None
+    if HAS_VIRTUAL_DISPLAY and not os.environ.get("DISPLAY"):
+        vdisplay = VirtualDisplay(visible=False, size=(1920, 1080))
+        vdisplay.start()
+        print(f"🖥️  가상 디스플레이 시작: DISPLAY={os.environ.get('DISPLAY')}")
+    else:
+        print(f"🖥️  DISPLAY={os.environ.get('DISPLAY', '(없음)')}")
+
     # 폴더 구조 생성
     base_dirs = [
         f"./data/{SAVE_DIR_NAME}/conversations",
         f"./data/{SAVE_DIR_NAME}/results",
         f"./data/{SAVE_DIR_NAME}/token_usage",
-        f"./data/{SAVE_DIR_NAME}/training_data"
+        f"./data/{SAVE_DIR_NAME}/training_data",
+        f"./data/{SAVE_DIR_NAME}/videos",
+        f"./data/{SAVE_DIR_NAME}/subtitles",
     ]
-    for d in base_dirs: os.makedirs(d, exist_ok=True)
+    for d in base_dirs:
+        os.makedirs(d, exist_ok=True)
 
     # 💡강제시작 지점
-    start = 161
-    end = 162
+    start = 1
+    end = 2
 
     # end = int(os.getenv("END_TASK", str(len(ALL_TASKS))))
     
@@ -231,7 +400,7 @@ async def main():
             await browser_session.start()
             await auto_login(browser_session)
             
-            result = await run_task(i, task, browser_session, model_name)
+            result = await run_task(i, task, browser_session, model_name, recorder=None)
             all_results.append(result)
             
             await browser_session.stop() 
@@ -254,6 +423,9 @@ async def main():
     with open(final_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
     print(f"✅ 수집 세션 종료. 최종 결과 저장됨: {final_path}")
+
+    if vdisplay:
+        vdisplay.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
