@@ -201,6 +201,7 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
     conv_path = f"./data/{SAVE_DIR_NAME}/conversations/task_{task_index:03d}.json"
     srt_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}.srt"
     events_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}_events.json"
+    gif_path = f"./data/{SAVE_DIR_NAME}/gifs/task_{task_index:03d}.gif"
 
     target_shortcut = ALL_SHORTCUTS[task_index] if task_index < len(ALL_SHORTCUTS) else ""
     extend_msg = EXTEND_SYSTEM_MESSAGE
@@ -228,11 +229,12 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         task_index=task_index,
         browser=browser_session,
         save_conversation_path=conv_path,
+        generate_gif=gif_path,
         sub_logger=sub_logger,
     )
 
     result = {"model": model_name, "task_index": task_index, "task": task, "success": None,
-              "video": None, "srt": srt_path}
+              "gif": None, "srt": srt_path}
 
     try:
         history = await agent.run(max_steps=MAX_STEPS)
@@ -241,8 +243,11 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         result["success"] = history.is_successful()
         result["steps"] = history.number_of_steps()
         result["total_time_seconds"] = round(time.time() - task_start_time, 2)
+        result["gif"] = gif_path if os.path.exists(gif_path) else None
         sub_logger.log_done(result["success"], result["steps"])
         print(f"결과: {'성공' if result['success'] else '실패'} ({result['steps']} steps)")
+        if result["gif"]:
+            print(f"🎞️  GIF 저장: {gif_path}")
 
     except Exception as e:
         agent.flush_logs(success=False)
@@ -273,7 +278,7 @@ async def main():
         f"./data/{SAVE_DIR_NAME}/results",
         f"./data/{SAVE_DIR_NAME}/token_usage",
         f"./data/{SAVE_DIR_NAME}/training_data",
-        f"./data/{SAVE_DIR_NAME}/videos",
+        f"./data/{SAVE_DIR_NAME}/gifs",
         f"./data/{SAVE_DIR_NAME}/subtitles",
     ]
     for d in base_dirs:
@@ -313,15 +318,10 @@ async def main():
         for i, task in list(enumerate(ALL_TASKS))[start:end]:
             print(f"▶️ 준비 중: Task {i} 세션 초기화...")
 
-            video_tmp_dir = os.path.abspath(f"./data/{SAVE_DIR_NAME}/videos/task_{i:03d}_tmp")
-            os.makedirs(video_tmp_dir, exist_ok=True)
-
             browser_session = BrowserSession(
                 browser_profile=BrowserProfile(
                     headless=True,
                     downloads_path=download_path,
-                    record_video_dir=video_tmp_dir,
-                    record_video_size={"width": 1280, "height": 720},
                 ),
                 keep_alive=False,
             )
@@ -332,18 +332,6 @@ async def main():
             all_results.append(result)
 
             await browser_session.stop()
-
-            # 녹화된 비디오 파일 rename (mp4/webm 모두 탐색)
-            video_files = glob.glob(f"{video_tmp_dir}/*.*")
-            if video_files:
-                ext = os.path.splitext(video_files[0])[1]  # .mp4 or .webm
-                final_video = f"./data/{SAVE_DIR_NAME}/videos/task_{i:03d}{ext}"
-                os.rename(video_files[0], final_video)
-                os.rmdir(video_tmp_dir)
-                result["video"] = final_video
-                print(f"🎥 비디오 저장: {final_video}")
-            else:
-                print(f"⚠️  비디오 파일 없음 (task {i})")
 
             await asyncio.sleep(SLEEP_BETWEEN_TASKS)
 
