@@ -218,14 +218,15 @@ MODELS = {
         model="cnu-agent-vision",
         base_url=VLLM_BASE_URL,
         api_key="dummy",
-        temperature=0.0
+        temperature=0.0,
+        max_tokens=1024,
     ),
 }
 
 # 💡 치명적 수정: 로컬 VLM도 반드시 Vision을 True로 설정해야 화면을 읽습니다!
 USE_VISION = {
-    "qwen_base": True, 
-    "qwen_bua": True,
+    "qwen_base": True,
+    "qwen_bua": False,  # 스크린샷 타임아웃 방지 + 텍스트 전용 추론
 }
 
 async def auto_login(browser_session: BrowserSession):
@@ -334,7 +335,16 @@ async def main():
             print(f"▶️ 평가 중: Task {i} - {task}")
             
             browser_session = BrowserSession(
-                browser_profile=BrowserProfile(headless=True, downloads_path=download_path),
+                browser_profile=BrowserProfile(
+                    headless=True,
+                    downloads_path=download_path,
+                    args=[
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                        "--disable-gpu",
+                        "--disable-software-rasterizer",
+                    ],
+                ),
                 keep_alive=False,
             )
             await browser_session.start()
