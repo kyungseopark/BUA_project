@@ -4,8 +4,6 @@ import sys
 import json
 import time
 import glob
-import platform
-import subprocess
 from datetime import datetime
 from browser_use import BrowserSession, BrowserProfile, ChatBrowserUse, ChatOpenAI, ChatGoogle
 from logged_agent import LoggedAgent
@@ -40,69 +38,71 @@ def _sec_to_srt(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-class VideoRecorder:
-    """ffmpeg 기반 화면 녹화기 (macOS: avfoundation, Linux: x11grab)"""
+class GIFRecorder:
+    """브라우저 스크린샷 기반 GIF 녹화기 (headless 환경용)"""
 
-    def __init__(self, output_path: str, display: str = ":1", width: int = 1920, height: int = 1080, fps: int = 15,
-                 screen_index: int = 4):
+    def __init__(self, output_path: str, interval: float = 2.0):
         self.output_path = output_path
-        self.display = display
-        self.width = width
-        self.height = height
-        self.fps = fps
-        self.screen_index = screen_index  # macOS avfoundation 스크린 인덱스 (보통 1)
-        self._proc: subprocess.Popen | None = None
+        self.interval = interval
+        self._frames: list[bytes] = []
+        self._task: asyncio.Task | None = None
+        self._running = False
+        self._browser_session = None
         self.start_time: float | None = None
-        self._is_macos = platform.system() == "Darwin"
 
-    def start(self):
+    def set_browser(self, browser_session):
+        self._browser_session = browser_session
+
+    async def start(self):
         self.start_time = time.time()
-        if self._is_macos:
-            # macOS: avfoundation 사용 (screen_index는 ffmpeg -list_devices로 확인)
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "avfoundation",
-                "-capture_cursor", "1",
-                "-r", str(self.fps),
-                "-i", f"{self.screen_index}:",  # screen:audio (오디오 없음)
-                "-vf", f"scale={self.width}:{self.height}",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "28",
-                self.output_path,
-            ]
-        else:
-            # Linux: x11grab 사용
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "x11grab",
-                "-r", str(self.fps),
-                "-s", f"{self.width}x{self.height}",
-                "-i", self.display,
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "28",
-                self.output_path,
-            ]
-        self._proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        self._running = True
+        self._frames = []
+        self._task = asyncio.create_task(self._capture_loop())
 
-    def stop(self) -> float:
-        """녹화 종료 후 총 길이(초) 반환"""
-        duration = time.time() - (self.start_time or time.time())
-        if self._proc and self._proc.poll() is None:
+    async def _capture_loop(self):
+        while self._running:
             try:
-                self._proc.stdin.write(b"q")
-                self._proc.stdin.flush()
-                self._proc.wait(timeout=15)
+                page = await self._browser_session.get_current_page()
+                screenshot = await page.screenshot(type="png")
+                self._frames.append(screenshot)
             except Exception:
-                self._proc.kill()
-        self._proc = None
+                pass
+            await asyncio.sleep(self.interval)
+
+    async def stop(self) -> float:
+        duration = time.time() - (self.start_time or time.time())
+        self._running = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._save_gif()
         return duration
+
+    def _save_gif(self):
+        if not self._frames:
+            print("⚠️  GIF 저장 실패: 프레임 없음")
+            return
+        try:
+            from PIL import Image
+            import io
+            images = []
+            for frame_bytes in self._frames:
+                img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+                img = img.resize((1280, 800), Image.LANCZOS)
+                images.append(img.convert("P", palette=Image.ADAPTIVE, colors=128))
+            images[0].save(
+                self.output_path,
+                save_all=True,
+                append_images=images[1:],
+                loop=0,
+                duration=int(self.interval * 1000),
+                optimize=False,
+            )
+        except Exception as e:
+            print(f"⚠️  GIF 저장 실패: {e}")
 
 
 class SubtitleLogger:
@@ -255,14 +255,14 @@ async def auto_login(browser_session: BrowserSession):
         print(f"⚠️ 로그인 프로세스 실패: {e}")
 
 async def run_task(task_index: int, task: str, browser_session: BrowserSession, model_name: str,
-                   recorder: VideoRecorder | None = None):
+                   recorder: GIFRecorder | None = None):
     # 💡 태스크별 개별 jsonl 경로 설정 (덮어쓰기 모드)
     task_log_path = f"./data/{SAVE_DIR_NAME}/training_data/task_{task_index:03d}.jsonl"
     if os.path.exists(task_log_path):
         os.remove(task_log_path)
 
     conv_path = f"./data/{SAVE_DIR_NAME}/conversations/task_{task_index:03d}.json"
-    video_path = f"./data/{SAVE_DIR_NAME}/videos/task_{task_index:03d}.mp4"
+    gif_path = f"./data/{SAVE_DIR_NAME}/videos/task_{task_index:03d}.gif"
     srt_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}.srt"
     events_path = f"./data/{SAVE_DIR_NAME}/subtitles/task_{task_index:03d}_events.json"
 
@@ -283,10 +283,10 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
 
     # 녹화 시작
     if recorder is None:
-        display_str = os.environ.get("DISPLAY", ":1")
-        recorder = VideoRecorder(output_path=video_path, display=display_str)
-    recorder.output_path = video_path
-    recorder.start()
+        recorder = GIFRecorder(output_path=gif_path)
+    recorder.output_path = gif_path
+    recorder.set_browser(browser_session)
+    await recorder.start()
     sub_logger = SubtitleLogger(task_index, task, task_start_time)
 
     agent = LoggedAgent(
@@ -303,7 +303,7 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
     )
 
     result = {"model": model_name, "task_index": task_index, "task": task, "success": None,
-              "video": video_path, "srt": srt_path}
+              "gif": gif_path, "srt": srt_path}
 
     try:
         history = await agent.run(max_steps=MAX_STEPS)
@@ -324,13 +324,13 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
         print(f"에러: {e}")
 
     finally:
-        duration = recorder.stop()
+        duration = await recorder.stop()
         sub_logger.save(
             json_path=events_path,
             srt_path=srt_path,
             total_duration=duration,
         )
-        print(f"🎥 녹화 저장: {video_path} ({duration:.1f}s) | 자막: {srt_path}")
+        print(f"🎥 GIF 저장: {gif_path} ({duration:.1f}s) | 자막: {srt_path}")
 
     return result
 
@@ -338,14 +338,7 @@ async def run_task(task_index: int, task: str, browser_session: BrowserSession, 
 async def main():
     model_name = sys.argv[1] if len(sys.argv) > 1 else "gemini"
 
-    # 가상 디스플레이 (서버 환경)
     vdisplay = None
-    if HAS_VIRTUAL_DISPLAY and not os.environ.get("DISPLAY"):
-        vdisplay = VirtualDisplay(visible=False, size=(1920, 1080))
-        vdisplay.start()
-        print(f"🖥️  가상 디스플레이 시작: DISPLAY={os.environ.get('DISPLAY')}")
-    else:
-        print(f"🖥️  DISPLAY={os.environ.get('DISPLAY', '(없음)')}")
 
     # 폴더 구조 생성
     base_dirs = [
@@ -394,7 +387,7 @@ async def main():
             print(f"▶️ 준비 중: Task {i} 세션 초기화...")
             
             browser_session = BrowserSession(
-                browser_profile=BrowserProfile(headless=False, downloads_path=download_path),
+                browser_profile=BrowserProfile(headless=True, downloads_path=download_path),
                 keep_alive=False, # 태스크 종료 시 브라우저 닫기
             )
             await browser_session.start()
