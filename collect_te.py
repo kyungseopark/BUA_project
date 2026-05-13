@@ -333,13 +333,12 @@ async def main():
 
             await browser_session.stop()
 
-            # 녹화된 webm 파일 rename
-            all_files = os.listdir(video_tmp_dir) if os.path.exists(video_tmp_dir) else []
-            print(f"[debug] tmp dir 파일 목록: {all_files}")
-            webm_files = glob.glob(f"{video_tmp_dir}/*.webm")
-            if webm_files:
-                final_video = f"./data/{SAVE_DIR_NAME}/videos/task_{i:03d}.webm"
-                os.rename(webm_files[0], final_video)
+            # 녹화된 비디오 파일 rename (mp4/webm 모두 탐색)
+            video_files = glob.glob(f"{video_tmp_dir}/*.*")
+            if video_files:
+                ext = os.path.splitext(video_files[0])[1]  # .mp4 or .webm
+                final_video = f"./data/{SAVE_DIR_NAME}/videos/task_{i:03d}{ext}"
+                os.rename(video_files[0], final_video)
                 os.rmdir(video_tmp_dir)
                 result["video"] = final_video
                 print(f"🎥 비디오 저장: {final_video}")
