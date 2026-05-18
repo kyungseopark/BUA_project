@@ -1,181 +1,237 @@
 """
 cnu_search.py
-통합정보시스템 메뉴별 탐색 + vision 필요성 분석 도구
+통합정보시스템 메뉴별 DOM 분석 + input token 최적화 전략 도구
 
 목적:
-  - 각 메뉴 페이지에서 DOM 텍스트만으로 충분한지 vs 스크린샷(vision)이 필요한지 판단
-  - 결과를 JSON으로 저장해 input token 최적화 전략 수립에 활용
+  - 각 메뉴 페이지에서 LLM에 전달되는 DOM 구조 분석
+  - vision(스크린샷) 없이 텍스트만으로 충분한지 판단
+  - input token 절감 가능한 부분 구체적으로 제안
 
 사용법:
   python cnu_search.py              # 전체 메뉴 탐색
-  python cnu_search.py 0 5          # 0~4번 메뉴만 탐색
+  python cnu_search.py 0 5          # 0~4번 메뉴만
 """
 
 import asyncio
-import base64
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
-from browser_use import BrowserSession, BrowserProfile, ChatOpenAI
-from browser_use.agent.service import Agent
+from browser_use import BrowserSession, BrowserProfile, ChatGoogle
 from dotenv import load_dotenv
+from logged_agent import LoggedAgent
 
 load_dotenv()
 
 CNU_ID = os.getenv("CNU_ID", "")
 CNU_PW = os.getenv("CNU_PW", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
 
 OUTPUT_DIR = Path("./data/cnu_search")
-MAX_STEPS_EXPLORE = 10  # 탐색용 에이전트는 짧게
+MAX_STEPS = 10
 SLEEP_BETWEEN = 3
 
-# ── 탐색 대상 메뉴 목록 ──────────────────────────────────────────────────────
-# (menu_id, 탐색 지시, 예상 카테고리)
+BASE_CONTEXT = "통합정보시스템 버튼을 클릭하고 열리는 탭으로 전환하세요.\n"
+
+# ── 탐색 대상 메뉴 ──────────────────────────────────────────────────────────
 EXPLORE_TARGETS = [
-    # 학생정보
-    {"id": "personal_info",       "category": "학생정보", "task": "학사행정 > 학생정보 메뉴로 이동해서 내 신상정보 화면을 열어줘."},
-    {"id": "contact_info",        "category": "학생정보", "task": "학사행정 > 학생정보 > 연락처 화면을 열어줘."},
-    # 학적관리
-    {"id": "leave_of_absence",    "category": "학적관리", "task": "학사행정 > 학적관리 > 휴학신청 화면을 열어줘."},
-    {"id": "major_change",        "category": "학적관리", "task": "학사행정 > 학적관리 > 전과신청 화면을 열어줘."},
-    {"id": "double_major",        "category": "학적관리", "task": "학사행정 > 학적관리 > 복수전공 신청 내역 화면을 열어줘."},
-    # 수강관리
-    {"id": "course_list",         "category": "수강관리", "task": "학사행정 > 수강관리 > 수강편람조회 화면을 열어줘."},
-    {"id": "syllabus",            "category": "수강관리", "task": "학사행정 > 수강관리 > 강의계획서 조회 화면을 열어줘."},
-    {"id": "my_courses",          "category": "수강관리", "task": "학사행정 > 수강관리 > 수강신청내역 조회 화면을 열어줘."},
-    {"id": "attendance",          "category": "수강관리", "task": "학사행정 > 수강관리 > 출결조회 화면을 열어줘."},
-    {"id": "lecture_eval",        "category": "수강관리", "task": "학사행정 > 수강관리 > 강의평가 화면을 열어줘."},
-    # 성적관리
-    {"id": "grade_lookup",        "category": "성적관리", "task": "학사행정 > 성적관리 > 성적조회 화면을 열어줘."},
-    {"id": "grade_transcript",    "category": "성적관리", "task": "학사행정 > 성적관리 > 성적통지표 조회 화면을 열어줘."},
-    {"id": "retake_list",         "category": "성적관리", "task": "학사행정 > 성적관리 > 재이수 가능 과목 화면을 열어줘."},
-    # 졸업관리
-    {"id": "grad_self_check",     "category": "졸업관리", "task": "학사행정 > 졸업관리 > 졸업자가진단 화면을 열어줘."},
-    {"id": "early_grad",          "category": "졸업관리", "task": "학사행정 > 졸업관리 > 조기졸업 신청 화면을 열어줘."},
-    {"id": "foreign_lang",        "category": "졸업관리", "task": "학사행정 > 졸업관리 > 외국어성적 신청 화면을 열어줘."},
-    # 교육과정
-    {"id": "curriculum",          "category": "교육과정", "task": "학사행정 > 교육과정 > 교육과정 조회 화면을 열어줘."},
-    {"id": "intensive_prog",      "category": "교육과정", "task": "학사행정 > 교육과정 > 심화과정 조회 화면을 열어줘."},
-    # 장학/등록
-    {"id": "scholarship",         "category": "장학/등록", "task": "학사행정 > 장학/등록 > 장학금 수혜내역 화면을 열어줘."},
-    {"id": "tuition",             "category": "장학/등록", "task": "학사행정 > 장학/등록 > 등록금 납부현황 화면을 열어줘."},
-    {"id": "tuition_bill",        "category": "장학/등록", "task": "학사행정 > 장학/등록 > 등록 고지서 화면을 열어줘."},
-    # 취창업/비교과
-    {"id": "internship",          "category": "취창업",   "task": "학사행정 > 취창업 > 백마인턴십 신청 화면을 열어줘."},
-    {"id": "volunteer",           "category": "취창업",   "task": "학사행정 > 취창업 > 사회봉사활동 신청 화면을 열어줘."},
-    # 국제교류
-    {"id": "credit_exchange",     "category": "국제교류", "task": "학사행정 > 국제교류 > 타대학학점교류 신청 화면을 열어줘."},
-    {"id": "overseas_activity",   "category": "국제교류", "task": "학사행정 > 국제교류 > 해외체험활동 신청 화면을 열어줘."},
-    # 상담/기타
-    {"id": "career_consult",      "category": "상담",     "task": "학사행정 > 미래설계상담 신청현황 화면을 열어줘."},
-    {"id": "classroom_schedule",  "category": "기타",     "task": "학사행정 > 강의실 시간표 조회 화면을 열어줘."},
-    {"id": "favorites",           "category": "기타",     "task": "통합정보시스템 메인에서 즐겨찾기 목록 화면을 열어줘."},
-    {"id": "academic_calendar",   "category": "기타",     "task": "통합정보시스템에서 학사일정 화면을 열어줘."},
-    {"id": "full_menu",           "category": "기타",     "task": "통합정보시스템 학사행정 전체 메뉴 목록이 보이도록 펼쳐줘."},
+    {"id": "personal_info",      "category": "학생정보", "task": "학사행정 > 학생정보 > 신상정보 화면을 열고, 내 전화번호를 알려줘."},
+    {"id": "contact_info",       "category": "학생정보", "task": "학사행정 > 학생정보 > 연락처 화면을 열어줘."},
+    {"id": "leave_of_absence",   "category": "학적관리", "task": "학사행정 > 학적관리 > 휴학신청 화면을 열어줘."},
+    {"id": "double_major",       "category": "학적관리", "task": "학사행정 > 학적관리 > 복수전공 신청 내역 화면을 열어줘."},
+    {"id": "course_list",        "category": "수강관리", "task": "학사행정 > 수강관리 > 수강편람조회 화면을 열어줘."},
+    {"id": "syllabus",           "category": "수강관리", "task": "학사행정 > 수강관리 > 강의계획서 조회 화면을 열어줘."},
+    {"id": "my_courses",         "category": "수강관리", "task": "학사행정 > 수강관리 > 수강신청내역 조회 화면을 열어줘."},
+    {"id": "attendance",         "category": "수강관리", "task": "학사행정 > 수강관리 > 출결조회 화면을 열어줘."},
+    {"id": "grade_lookup",       "category": "성적관리", "task": "학사행정 > 성적관리 > 성적조회 화면을 열어줘."},
+    {"id": "grade_transcript",   "category": "성적관리", "task": "학사행정 > 성적관리 > 성적통지표 화면을 열어줘."},
+    {"id": "grad_self_check",    "category": "졸업관리", "task": "학사행정 > 졸업관리 > 졸업자가진단 화면을 열어줘."},
+    {"id": "foreign_lang",       "category": "졸업관리", "task": "학사행정 > 졸업관리 > 외국어성적 신청 화면을 열어줘."},
+    {"id": "curriculum",         "category": "교육과정", "task": "학사행정 > 교육과정 조회 화면을 열어줘."},
+    {"id": "scholarship",        "category": "장학/등록", "task": "학사행정 > 장학/등록 > 장학금 수혜내역 화면을 열어줘."},
+    {"id": "tuition",            "category": "장학/등록", "task": "학사행정 > 장학/등록 > 등록금 납부현황 화면을 열어줘."},
+    {"id": "internship",         "category": "취창업",   "task": "학사행정 > 취창업 > 백마인턴십 신청 화면을 열어줘."},
+    {"id": "credit_exchange",    "category": "국제교류", "task": "학사행정 > 국제교류 > 타대학학점교류 신청 화면을 열어줘."},
+    {"id": "career_consult",     "category": "상담",     "task": "학사행정 > 미래설계상담 신청현황 화면을 열어줘."},
+    {"id": "academic_calendar",  "category": "기타",     "task": "통합정보시스템에서 학사일정 화면을 열어줘."},
+    {"id": "full_menu",          "category": "기타",     "task": "통합정보시스템 학사행정 전체 메뉴를 펼쳐줘."},
 ]
 
-# ── GPT-4o로 vision 필요성 분석 ──────────────────────────────────────────────
-ANALYSIS_SYSTEM_PROMPT = """You are an expert at analyzing web pages from CNU university's eXbuilder6-based integrated information system.
-Evaluate whether a page requires visual (screenshot) understanding or if DOM text alone is sufficient for an LLM agent to complete tasks.
 
-eXbuilder6 specifics:
-- Grid/table data often rendered as visual elements → may not appear in DOM text
-- Calendar widgets require visual interaction
-- Complex dropdown comboboxes may need visual feedback
-- Charts, diagrams, PDF viewers are fully visual
-- Simple text forms, notice boards → DOM text usually sufficient
+# ── 대화 로그에서 DOM 분석 ──────────────────────────────────────────────────
+def parse_conversation_log(jsonl_path: str) -> list[dict]:
+    """LoggedAgent가 저장한 JSONL에서 스텝별 DOM/토큰 정보 추출"""
+    steps = []
+    if not os.path.exists(jsonl_path):
+        return steps
 
-Return ONLY valid JSON, no markdown."""
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                item = json.loads(line)
+                step_info = {
+                    "step": item.get("step_number"),
+                    "system_prompt_len": 0,
+                    "dom_text_len": 0,
+                    "has_screenshot": False,
+                    "agent_state_len": 0,
+                    "agent_history_len": 0,
+                    "total_input_len": 0,
+                }
 
-ANALYSIS_USER_PROMPT = """Analyze this 통합정보시스템 page.
+                for msg in item.get("input", []):
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
 
-DOM text extracted (first 3000 chars):
-{dom_text}
+                    if role == "system":
+                        step_info["system_prompt_len"] = len(str(content))
 
-Screenshot attached.
+                    elif role == "user":
+                        if isinstance(content, list):
+                            for part in content:
+                                ptype = part.get("type", "")
+                                text = str(part.get("text", ""))
+                                if ptype == "text":
+                                    step_info["total_input_len"] += len(text)
+                                    # browser_state 섹션 (실제 DOM 요소들)
+                                    if "<browser_state>" in text:
+                                        s = text.find("<browser_state>")
+                                        e = text.find("</browser_state>")
+                                        step_info["agent_state_len"] = (e - s) if e > s else len(text) - s
+                                    if "<agent_history>" in text:
+                                        hist_start = text.find("<agent_history>")
+                                        hist_end = text.find("</agent_history>")
+                                        if hist_end > hist_start:
+                                            step_info["agent_history_len"] = hist_end - hist_start
+                                elif ptype == "image_url":
+                                    step_info["has_screenshot"] = True
+                        elif isinstance(content, str):
+                            step_info["total_input_len"] += len(content)
 
-Respond with JSON:
+                steps.append(step_info)
+            except Exception:
+                continue
+
+    return steps
+
+
+def summarize_steps(steps: list[dict]) -> dict:
+    """스텝 목록에서 대표 통계 추출 (첫 번째 실제 DOM 스텝 기준)"""
+    if not steps:
+        return {}
+
+    # 첫 번째 DOM이 있는 스텝 사용 (step 1은 초기화라 agent_state가 작음)
+    target = steps[1] if len(steps) > 1 else steps[0]
+    return {
+        "total_steps": len(steps),
+        "system_prompt_chars": target["system_prompt_len"],
+        "agent_state_chars": target["agent_state_len"],
+        "agent_history_chars": target["agent_history_len"],
+        "has_screenshot": target["has_screenshot"],
+        "total_input_chars": target["total_input_len"] + target["system_prompt_len"],
+        # 대략적인 토큰 수 추정 (한국어 평균 ~2.5자/토큰)
+        "estimated_tokens": int((target["total_input_len"] + target["system_prompt_len"]) / 2.5),
+    }
+
+
+# ── Gemini로 DOM 최적화 분석 ────────────────────────────────────────────────
+ANALYSIS_PROMPT = """당신은 웹 에이전트의 input token을 최적화하는 전문가입니다.
+아래는 충남대학교 통합정보시스템(eXbuilder6 기반)의 특정 메뉴 페이지에서 LLM 에이전트에게 전달된 실제 입력 데이터입니다.
+
+[메뉴 정보]
+- menu_id: {menu_id}
+- category: {category}
+
+[토큰 사용 현황]
+- 시스템 프롬프트: {system_prompt_chars}자
+- agent_state(DOM): {agent_state_chars}자
+- agent_history: {agent_history_chars}자
+- 스크린샷 포함: {has_screenshot}
+- 총 입력 추정 토큰: {estimated_tokens}개
+
+[실제 agent_state 내용 (처음 3000자)]
+{agent_state_sample}
+
+위 정보를 바탕으로 다음을 분석해줘:
+1. vision(스크린샷) 없이 DOM 텍스트만으로 이 페이지의 전형적인 태스크를 수행할 수 있는가?
+2. DOM에서 삭제하거나 압축할 수 있는 불필요한 요소는 무엇인가?
+3. 토큰을 줄이기 위한 구체적인 최적화 방법은?
+
+반드시 아래 JSON 형식으로만 답변해줘 (마크다운 코드블록 없이 순수 JSON):
 {{
-  "menu_id": "{menu_id}",
-  "category": "{category}",
-  "page_type": "form|grid_table|list|dashboard|calendar|pdf|mixed|other",
-  "vision_required": true or false,
-  "confidence": "high|medium|low",
-  "reason_ko": "한국어로 판단 이유 설명 (2~3문장)",
-  "visual_elements": ["시각적으로만 파악 가능한 요소들"],
-  "dom_extractable": ["DOM 텍스트로 충분히 추출 가능한 요소들"],
-  "token_tip_ko": "이 페이지에서 토큰 절감 방법 (한국어)"
+  "vision_required": true 또는 false,
+  "vision_reason": "vision 필요/불필요 이유 (한국어 2문장)",
+  "dom_issues": ["DOM에서 발견된 불필요한 요소들"],
+  "optimization_tips": ["구체적인 최적화 방법들"],
+  "estimated_token_reduction": "최적화 시 예상 절감률 (예: 30~40%)",
+  "priority": "high|medium|low (최적화 우선순위)"
 }}"""
 
 
-async def analyze_with_gpt4o(menu_id: str, category: str, dom_text: str, screenshot_b64: str | None) -> dict:
-    """GPT-4o로 vision 필요성 분석"""
-    import openai
+async def analyze_with_gemini(menu_id: str, category: str, stats: dict, agent_state_sample: str) -> dict:
+    import google.genai as genai
+    import google.genai.types as genai_types
 
-    client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-    user_content = [
-        {
-            "type": "text",
-            "text": ANALYSIS_USER_PROMPT.format(
-                menu_id=menu_id,
-                category=category,
-                dom_text=dom_text[:3000],
-            ),
-        }
-    ]
-
-    if screenshot_b64:
-        user_content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{screenshot_b64}", "detail": "low"},
-        })
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    prompt = ANALYSIS_PROMPT.format(
+        menu_id=menu_id,
+        category=category,
+        system_prompt_chars=stats.get("system_prompt_chars", 0),
+        agent_state_chars=stats.get("agent_state_chars", 0),
+        agent_history_chars=stats.get("agent_history_chars", 0),
+        has_screenshot=stats.get("has_screenshot", False),
+        estimated_tokens=stats.get("estimated_tokens", 0),
+        agent_state_sample=agent_state_sample[:3000],
+    )
 
     try:
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            max_tokens=512,
-            temperature=0.0,
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                temperature=0.0,
+                max_output_tokens=2048,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            ),
         )
-        raw = response.choices[0].message.content.strip()
-        # JSON 파싱
-        if raw.startswith("```"):
+        raw = response.text.strip()
+        # 마크다운 코드블록 제거
+        if "```" in raw:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
+            raw = raw.strip()
+        # JSON 부분만 추출 (앞뒤 텍스트 제거)
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            raw = raw[start:end]
         return json.loads(raw)
     except Exception as e:
-        return {
-            "menu_id": menu_id,
-            "category": category,
-            "error": str(e),
-            "vision_required": None,
-        }
+        return {"error": str(e), "vision_required": None}
 
 
-async def explore_menu(target: dict, browser_session: BrowserSession, gpt_llm, analysis_dir: Path) -> dict:
-    """단일 메뉴 탐색 + 분석"""
+# ── 메뉴 탐색 + 분석 ────────────────────────────────────────────────────────
+async def explore_menu(target: dict, gemini_llm, output_dir: Path) -> dict:
     menu_id = target["id"]
     category = target["category"]
     task = target["task"]
 
-    print(f"\n[{menu_id}] {task[:60]}...")
+    print(f"\n[{menu_id}] {task}")
 
-    BASE_CONTEXT = "통합정보시스템 버튼을 클릭하고 열리는 탭으로 전환하세요.\n"
     full_task = (
         f"{BASE_CONTEXT}"
         f"요청: {task}\n"
-        "해당 화면에 도달하면 즉시 done을 호출해줘. 데이터 조회나 입력은 하지 말고, "
-        "화면 진입만 확인하면 돼."
+        "화면에 도달한 후 요청한 정보를 찾아서 done으로 반환해줘."
     )
+
+    log_path = str(output_dir / f"{menu_id}.jsonl")
+    if os.path.exists(log_path):
+        os.remove(log_path)
 
     result = {
         "menu_id": menu_id,
@@ -183,122 +239,132 @@ async def explore_menu(target: dict, browser_session: BrowserSession, gpt_llm, a
         "task": task,
         "timestamp": datetime.now().isoformat(),
         "navigation_success": False,
-        "screenshot_saved": False,
-        "dom_text_length": 0,
+        "steps": 0,
+        "token_stats": {},
         "analysis": None,
     }
 
+    # test.py 패턴: 태스크마다 새 브라우저 세션 생성 + 로그인
+    browser_session = BrowserSession(
+        browser_profile=BrowserProfile(
+            headless=False,
+            viewport={"width": 1920, "height": 1080},
+            args=["--disable-dev-shm-usage", "--no-sandbox"],
+        )
+    )
+
     try:
-        agent = Agent(
+        await browser_session.start()
+        await auto_login(browser_session)
+
+        agent = LoggedAgent(
             task=full_task,
-            llm=gpt_llm,
-            use_vision=True,
+            llm=gemini_llm,
+            use_vision=False,
+            log_path=log_path,
+            task_index=0,
             browser=browser_session,
             generate_gif=False,
         )
 
-        history = await agent.run(max_steps=MAX_STEPS_EXPLORE)
+        history = await agent.run(max_steps=MAX_STEPS)
+        agent.flush_logs(success=history.is_successful())
+
         result["navigation_success"] = history.is_successful()
         result["steps"] = history.number_of_steps()
 
-        # 마지막 유효 스크린샷 + DOM 추출
-        screenshots = history.screenshots(return_none_if_not_screenshot=True)
-        last_screenshot = None
-        for s in reversed(screenshots):
-            if s:
-                last_screenshot = s
-                break
+        # 대화 로그 파싱
+        steps_data = parse_conversation_log(log_path)
+        stats = summarize_steps(steps_data)
+        result["token_stats"] = stats
 
-        # 마지막 state의 DOM text
-        dom_text = ""
-        for h in reversed(history.history):
-            if h.state and h.state.dom_state:
-                dom_text = getattr(h.state.dom_state, "element_tree", "") or ""
-                if isinstance(dom_text, object) and not isinstance(dom_text, str):
-                    dom_text = str(dom_text)
-                break
+        # agent_state 샘플 추출 (Gemini 분석용)
+        agent_state_sample = ""
+        if os.path.exists(log_path):
+            with open(log_path, encoding="utf-8") as f:
+                lines = f.readlines()
+            # DOM이 가장 풍부한 스텝 사용 (신상정보 페이지 진입 후)
+            target_line = lines[min(3, len(lines)-1)]
+            item = json.loads(target_line)
+            for msg in item.get("input", []):
+                if msg.get("role") == "user":
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        for part in content:
+                            if part.get("type") == "text" and "<browser_state>" in part.get("text", ""):
+                                text = part["text"]
+                                s = text.find("<browser_state>")
+                                agent_state_sample = text[s:s+4000]
+                                break
 
-        result["dom_text_length"] = len(dom_text)
+        print(f"  → 총 입력 추정 토큰: {stats.get('estimated_tokens', '?')}개 "
+              f"| DOM: {stats.get('agent_state_chars', '?')}자 "
+              f"| 스크린샷: {stats.get('has_screenshot', '?')}")
 
-        # 스크린샷 저장
-        if last_screenshot:
-            import base64 as b64
-            img_data = b64.b64decode(last_screenshot)
-            img_path = analysis_dir / f"{menu_id}.png"
-            img_path.write_bytes(img_data)
-            result["screenshot_saved"] = True
-            result["screenshot_path"] = str(img_path)
-
-        # GPT-4o 분석
-        if OPENAI_API_KEY:
-            print(f"  → GPT-4o 분석 중...")
-            analysis = await analyze_with_gpt4o(menu_id, category, dom_text, last_screenshot)
+        # Gemini 분석
+        if GEMINI_API_KEY and stats:
+            print(f"  → Gemini 분석 중...")
+            analysis = await analyze_with_gemini(menu_id, category, stats, agent_state_sample)
             result["analysis"] = analysis
-            vision_flag = analysis.get("vision_required")
-            print(f"  → vision_required={vision_flag} | {analysis.get('reason_ko', '')[:60]}")
-        else:
-            # API 키 없으면 heuristic만
-            result["analysis"] = _heuristic_analysis(menu_id, category, dom_text)
+            print(f"  → vision_required={analysis.get('vision_required')} | "
+                  f"절감 예상: {analysis.get('estimated_token_reduction', '?')} | "
+                  f"우선순위: {analysis.get('priority', '?')}")
 
     except Exception as e:
         result["error"] = str(e)
         print(f"  ⚠️  에러: {e}")
 
+    finally:
+        await browser_session.stop()
+
     return result
 
 
-def _heuristic_analysis(menu_id: str, category: str, dom_text: str) -> dict:
-    """GPT-4o 없을 때 DOM 길이 기반 간단 휴리스틱"""
-    visual_keywords = ["calendar", "chart", "graph", "image", "canvas", "pdf", "그래프", "달력"]
-    has_visual = any(kw in dom_text.lower() for kw in visual_keywords)
-    dom_rich = len(dom_text) > 500
-
-    return {
-        "menu_id": menu_id,
-        "category": category,
-        "page_type": "unknown",
-        "vision_required": has_visual or not dom_rich,
-        "confidence": "low",
-        "reason_ko": f"휴리스틱: dom_text={len(dom_text)}자, 시각요소감지={has_visual}",
-        "visual_elements": [],
-        "dom_extractable": [],
-        "token_tip_ko": "GPT-4o 분석 없이 휴리스틱 판단됨",
-    }
-
-
+# ── 요약 출력 ────────────────────────────────────────────────────────────────
 def print_summary(results: list[dict]):
-    vision_required = [r for r in results if r.get("analysis", {}) and r["analysis"].get("vision_required") is True]
-    text_only = [r for r in results if r.get("analysis", {}) and r["analysis"].get("vision_required") is False]
-    unknown = [r for r in results if r.get("analysis") is None or r["analysis"].get("vision_required") is None]
+    print("\n" + "=" * 65)
+    print(f"{'메뉴':<22} {'토큰':>6} {'DOM':>6} {'Vision':>7} {'절감':>8} {'우선순위':>6}")
+    print("-" * 65)
 
-    print("\n" + "=" * 60)
-    print(f"📊 분석 완료: 총 {len(results)}개 메뉴")
-    print("=" * 60)
-    print(f"  ✅ 텍스트만으로 충분: {len(text_only)}개")
-    for r in text_only:
-        print(f"     - [{r['category']}] {r['menu_id']}")
+    for r in results:
+        stats = r.get("token_stats", {})
+        analysis = r.get("analysis") or {}
+        tokens = stats.get("estimated_tokens", 0)
+        dom = stats.get("agent_state_chars", 0)
+        vision = str(analysis.get("vision_required", "?"))
+        reduction = analysis.get("estimated_token_reduction", "-")
+        priority = analysis.get("priority", "-")
+        name = r["menu_id"][:20]
+        print(f"{name:<22} {tokens:>6,} {dom:>6,} {vision:>7} {reduction:>8} {priority:>6}")
 
-    print(f"\n  🖼️  Vision 필요:       {len(vision_required)}개")
-    for r in vision_required:
-        tip = r["analysis"].get("token_tip_ko", "")
-        print(f"     - [{r['category']}] {r['menu_id']} → {tip[:50]}")
+    print("=" * 65)
 
-    print(f"\n  ❓ 판단 불가:          {len(unknown)}개")
-    for r in unknown:
-        print(f"     - [{r['category']}] {r['menu_id']}")
+    vision_required = [r for r in results if (r.get("analysis") or {}).get("vision_required") is True]
+    text_only = [r for r in results if (r.get("analysis") or {}).get("vision_required") is False]
+    high_priority = [r for r in results if (r.get("analysis") or {}).get("priority") == "high"]
+
+    print(f"\n✅ 텍스트만 충분: {len(text_only)}개  |  🖼️  Vision 필요: {len(vision_required)}개")
+    if high_priority:
+        print(f"\n🔥 최적화 우선순위 HIGH ({len(high_priority)}개):")
+        for r in high_priority:
+            tips = (r.get("analysis") or {}).get("optimization_tips", [])
+            print(f"  [{r['category']}] {r['menu_id']}")
+            for tip in tips[:2]:
+                print(f"    · {tip}")
 
 
+# ── 메인 ────────────────────────────────────────────────────────────────────
 async def auto_login(browser_session: BrowserSession):
     try:
         await browser_session.navigate_to("https://portal.cnu.ac.kr/login.jsp")
         await asyncio.sleep(10)
         bu_page = await browser_session.get_current_page()
         await bu_page.evaluate(
-            f"document.querySelector(\"input[name='user_id']\").value = '{CNU_ID}';"
+            f"(...args) => {{ document.querySelector(\"input[name='user_id']\").value = '{CNU_ID}'; }}"
         )
         await asyncio.sleep(0.5)
         await bu_page.evaluate(
-            f"document.querySelector(\"input[name='user_password']\").value = '{CNU_PW}';"
+            f"(...args) => {{ document.querySelector(\"input[name='user_password']\").value = '{CNU_PW}'; }}"
         )
         await asyncio.sleep(1)
         await bu_page.press("Enter")
@@ -314,61 +380,42 @@ async def main():
     targets = EXPLORE_TARGETS[start_idx:end_idx]
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    analysis_dir = OUTPUT_DIR / "screenshots"
-    analysis_dir.mkdir(exist_ok=True)
+    logs_dir = OUTPUT_DIR / "logs"
+    logs_dir.mkdir(exist_ok=True)
 
-    print(f"\n🔍 CNU 통합정보시스템 탐색 시작 ({len(targets)}개 메뉴)")
-    print(f"   저장 경로: {OUTPUT_DIR}")
+    print(f"\n🔍 CNU 통합정보시스템 DOM 분석 시작 ({len(targets)}개 메뉴)")
 
-    # GPT-4o — 탐색 + 분석 모두 사용
-    gpt_llm = ChatOpenAI(model="gpt-4o", api_key=OPENAI_API_KEY, temperature=0.0)
-
-    browser_session = BrowserSession(
-        browser_profile=BrowserProfile(
-            headless=True,
-            viewport={"width": 1920, "height": 1080},
-            args=["--disable-dev-shm-usage", "--no-sandbox"],
-        )
-    )
-    await browser_session.start()
-    await auto_login(browser_session)
+    gemini_llm = ChatGoogle(model="gemini-2.5-flash", api_key=GEMINI_API_KEY, temperature=0.0)
 
     all_results = []
-    try:
-        for target in targets:
-            result = await explore_menu(target, browser_session, gpt_llm, analysis_dir)
-            all_results.append(result)
+    for target in targets:
+        result = await explore_menu(target, gemini_llm, logs_dir)
+        all_results.append(result)
 
-            # 중간 저장
-            out_path = OUTPUT_DIR / "results.json"
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(all_results, f, ensure_ascii=False, indent=2)
+        with open(OUTPUT_DIR / "results.json", "w", encoding="utf-8") as f:
+            json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-            await asyncio.sleep(SLEEP_BETWEEN)
+        await asyncio.sleep(SLEEP_BETWEEN)
 
-    finally:
-        await browser_session.stop()
-
-    # 최종 요약 출력
     print_summary(all_results)
 
-    # vision 필요/불필요 분리 저장
+    # vision map 저장
     vision_map = {
         r["menu_id"]: {
-            "vision_required": r.get("analysis", {}).get("vision_required"),
-            "confidence": r.get("analysis", {}).get("confidence"),
-            "reason_ko": r.get("analysis", {}).get("reason_ko"),
-            "token_tip_ko": r.get("analysis", {}).get("token_tip_ko"),
+            "category": r["category"],
+            "vision_required": (r.get("analysis") or {}).get("vision_required"),
+            "estimated_tokens": r.get("token_stats", {}).get("estimated_tokens"),
+            "estimated_token_reduction": (r.get("analysis") or {}).get("estimated_token_reduction"),
+            "priority": (r.get("analysis") or {}).get("priority"),
+            "optimization_tips": (r.get("analysis") or {}).get("optimization_tips", []),
         }
         for r in all_results
     }
     with open(OUTPUT_DIR / "vision_map.json", "w", encoding="utf-8") as f:
         json.dump(vision_map, f, ensure_ascii=False, indent=2)
 
-    print(f"\n📁 결과 저장:")
-    print(f"   전체:      {OUTPUT_DIR}/results.json")
-    print(f"   vision map: {OUTPUT_DIR}/vision_map.json")
-    print(f"   스크린샷:  {analysis_dir}/")
+    print(f"\n📁 결과: {OUTPUT_DIR}/results.json")
+    print(f"📁 요약: {OUTPUT_DIR}/vision_map.json")
 
 
 if __name__ == "__main__":

@@ -330,7 +330,7 @@ async def main():
     print(f"\n🚀 [{model_name}] 모델 논문 평가 라이브 수집 시작 (총 {end}개)...\n")
 
     try:
-        for i, task in enumerate(EVAL_TASKS):
+        for i, task in enumerate(EVAL_TASKS[start:end], start=start):
             print(f"▶️ 평가 중: Task {i} - {task}")
             
             browser_session = BrowserSession(
