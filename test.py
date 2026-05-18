@@ -323,7 +323,12 @@ async def main():
 
     start = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     end = int(sys.argv[3]) if len(sys.argv) > 3 else start + 1
-    all_results = []
+    progress_path = f"./data/{SAVE_DIR_NAME}/results/progress_latest.json"
+    if os.path.exists(progress_path):
+        with open(progress_path, "r", encoding="utf-8") as f:
+            all_results = json.load(f)
+    else:
+        all_results = []
     download_path = os.path.abspath(f"./data/{SAVE_DIR_NAME}/downloads")
     os.makedirs(download_path, exist_ok=True)
 
