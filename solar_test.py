@@ -90,8 +90,8 @@ class SubtitleLogger:
         self._add(self._elapsed(), "step", f"[Step {step}] {text}", step=step)
 
     def log_done(self, success: bool, steps: int):
-        status = "성공" if success else "실패"
-        self._add(self._elapsed(), "task_end", f"[완료] {status} ({steps}단계)")
+        status = "Success" if success else "Failed"
+        self._add(self._elapsed(), "task_end", f"[Done] {status} ({steps} steps)")
 
     def _build_srt(self) -> str:
         lines: list[str] = []
