@@ -66,7 +66,7 @@ SITE_TASKS = [
         "start_url": "https://library.cnu.ac.kr/",  
         "base_context": (
             "충남대학교 도서관 사이트에 접속되어 있습니다. "
-            "로그인이 필요하면 아이디 {{cnu_id}}, 비밀번호 {{cnu_pw}}로 로그인하세요.\n"
+            "로그인이 필요할 때만 아이디 {{cnu_id}}, 비밀번호 {{cnu_pw}}로 로그인하세요.\n"
         ),
         "tasks": [
             "'인공지능'으로 검색해서 대출 가능한 책 목록을 알려줘.",

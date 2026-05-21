@@ -47,7 +47,7 @@ KNOWN_MODELS = {"gemini", "solar"}
 MODELS = {
     "gemini": lambda: (
         ChatGoogle(model="gemini-2.5-flash", api_key=GOOGLE_API_KEY, temperature=0.0),
-        True,
+        False,
     ),
     "solar": lambda: (
         ChatOpenAI(model=VLLM_MODEL, base_url=VLLM_BASE_URL, api_key="dummy", temperature=0.0),
@@ -282,7 +282,7 @@ async def main():
 
                 browser_session = BrowserSession(
                     browser_profile=BrowserProfile(
-                        headless=True,
+                        headless=False,
                         viewport={"width": 1920, "height": 1080},
                         downloads_path=download_path,
                         proxy={"server": "socks5://localhost:8080"} if model_name == "solar" else None,
