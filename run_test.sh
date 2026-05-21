@@ -6,6 +6,6 @@ for SITE in "${SITES[@]}"; do
     echo "=========================================="
     echo "[$SITE] 태스크 0번 테스트 (model: $MODEL)"
     echo "=========================================="
-    DISPLAY=:1 python solar_test.py "$MODEL" "$SITE" 0 1
+    DISPLAY=:1 python solar_test.py "$MODEL" "$SITE"
     echo ""
 done
