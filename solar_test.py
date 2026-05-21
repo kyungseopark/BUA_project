@@ -152,7 +152,7 @@ async def run_task(
         save_conversation_path=conv_path,
         generate_gif=gif_path,
         sub_logger=sub_logger,
-        llm_timeout=180,
+        llm_timeout=60,
     )
 
     result = {
