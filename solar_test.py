@@ -282,7 +282,7 @@ async def main():
 
                 browser_session = BrowserSession(
                     browser_profile=BrowserProfile(
-                        headless=False,
+                        headless=True,
                         viewport={"width": 1920, "height": 1080},
                         downloads_path=download_path,
                         proxy={"server": "socks5://localhost:8080"} if model_name == "solar" else None,
