@@ -1,6 +1,6 @@
 #!/bin/bash
 MODEL=${1:-solar}
-SITES=(dept cnuwith library cnuit cyber approval)
+SITES=(dept cnuwith library cnuit cyber)
 
 for SITE in "${SITES[@]}"; do
     echo "=========================================="
