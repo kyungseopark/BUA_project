@@ -34,7 +34,8 @@ SITE_TASKS = [
         "site_name": "학사지원시스템",
         "start_url": "https://with.cnu.ac.kr/",  
         "base_context": (
-            "CNU With U+ 서비스에 접속되어 있습니다.\n"
+            "CNU With U+ 서비스에 접속되어 있습니다. "
+            "로그인이 필요하면 아이디 {{cnu_id}}, 비밀번호 {{cnu_pw}}로 로그인하세요.\n"
         ),
         "tasks": [
             "2026년 1학기 개인 비교과 프로그램 최신 등록된 3개 알려줘",
@@ -64,7 +65,8 @@ SITE_TASKS = [
         "site_name": "도서관",
         "start_url": "https://library.cnu.ac.kr/",  
         "base_context": (
-            "충남대학교 도서관 사이트에 접속되어 있습니다.\n"
+            "충남대학교 도서관 사이트에 접속되어 있습니다. "
+            "로그인이 필요하면 아이디 {{cnu_id}}, 비밀번호 {{cnu_pw}}로 로그인하세요.\n"
         ),
         "tasks": [
             "'인공지능'으로 검색해서 대출 가능한 책 목록을 알려줘.",
@@ -129,7 +131,8 @@ SITE_TASKS = [
         "site_name": "사이버캠퍼스",
         "start_url": "https://dcs-lcms.cnu.ac.kr/",  
         "base_context": (
-            "사이버캠퍼스에 접속되어 있습니다.\n"
+            "사이버캠퍼스에 접속되어 있습니다. "
+            "로그인이 필요하면 아이디 {{cnu_id}}, 비밀번호 {{cnu_pw}}로 로그인하세요.\n"
         ),
         "tasks": [
             "강의실에서 모든 수강 과목명을 알려줘",

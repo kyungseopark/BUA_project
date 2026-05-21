@@ -47,11 +47,11 @@ KNOWN_MODELS = {"gemini", "solar"}
 MODELS = {
     "gemini": lambda: (
         ChatGoogle(model="gemini-2.5-flash", api_key=GOOGLE_API_KEY, temperature=0.0),
-        False,   # use_vision
+        True,
     ),
     "solar": lambda: (
         ChatOpenAI(model=VLLM_MODEL, base_url=VLLM_BASE_URL, api_key="dummy", temperature=0.0),
-        False,  # use_vision
+        True,
     ),
 }
 
@@ -285,7 +285,7 @@ async def main():
                         headless=False,
                         viewport={"width": 1920, "height": 1080},
                         downloads_path=download_path,
-                        # proxy={"server": "socks5://localhost:8080"},  # 서버 실행 시 활성화
+                        proxy={"server": "socks5://localhost:8080"} if model_name == "solar" else None,
                         args=[
                             "--disable-dev-shm-usage",
                             "--no-sandbox",
