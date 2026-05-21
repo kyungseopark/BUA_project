@@ -205,6 +205,8 @@ EVAL_TASKS = [
     "로그인 연장해줘.",
     "즐겨찾기 목록 알려줘",
     "학사 일정 알려줘.",
+    "휴학 신청 시 준비해야 하는것과 주의사항 알려줘",
+    "자퇴하려면 어디서 신청하거나 어떤 걸 준비해야해?"
 ]
 
 MODELS = {
@@ -332,7 +334,7 @@ async def main():
     download_path = os.path.abspath(f"./data/{SAVE_DIR_NAME}/downloads")
     os.makedirs(download_path, exist_ok=True)
 
-    print(f"\n🚀 [{model_name}] 모델 논문 평가 라이브 수집 시작 (총 {end}개)...\n")
+    print(f"\n🚀 [{model_name}] 모델 평가 라이브 수집 시작 (총 {end}개)...\n")
 
     try:
         for i, task in enumerate(EVAL_TASKS[start:end], start=start):
