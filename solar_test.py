@@ -278,6 +278,11 @@ async def main():
         try:
             for rel_idx, task in enumerate(target_tasks):
                 abs_idx = task_start + rel_idx
+                log_path_check = SAVE_DIR / site_id / "training_data" / f"task_{abs_idx:03d}.jsonl"
+                if log_path_check.exists():
+                    print(f"\n[{site_name}] Task {abs_idx}: 이미 완료 — 건너뜀")
+                    continue
+
                 print(f"\n{'─'*60}")
                 print(f"[{site_name}] Task {abs_idx}: {task}")
 
