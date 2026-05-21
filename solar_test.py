@@ -36,7 +36,7 @@ CNU_ID = os.getenv("CNU_ID", "")
 CNU_PW = os.getenv("CNU_PW", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
-VLLM_MODEL = os.getenv("VLLM_MODEL", "solar-pro")
+VLLM_MODEL = os.getenv("VLLM_MODEL", "solar-open")
 
 MAX_STEPS = 20
 SLEEP_BETWEEN_TASKS = 3
