@@ -50,7 +50,7 @@ MODELS = {
         False,
     ),
     "solar": lambda: (
-        ChatOpenAI(model=VLLM_MODEL, base_url=VLLM_BASE_URL, api_key="dummy", temperature=0.0, max_completion_tokens=6000, timeout=180.0),
+        ChatOpenAI(model=VLLM_MODEL, base_url=VLLM_BASE_URL, api_key="dummy", temperature=0.0, max_completion_tokens=5000, timeout=75.0),
         False,
     ),
 }
@@ -152,7 +152,7 @@ async def run_task(
         save_conversation_path=conv_path,
         generate_gif=gif_path,
         sub_logger=sub_logger,
-        llm_timeout=60,
+        llm_timeout=75,
     )
 
     result = {
