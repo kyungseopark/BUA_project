@@ -51,7 +51,7 @@ MODELS = {
     ),
     "solar": lambda: (
         ChatOpenAI(model=VLLM_MODEL, base_url=VLLM_BASE_URL, api_key="dummy", temperature=0.0),
-        True,
+        False,
     ),
 }
 
