@@ -284,7 +284,7 @@ async def main():
                     browser_profile=BrowserProfile(
                         headless=False,
                         viewport={"width": 1920, "height": 1080},
-                        downloads_path=download_path,
+                        accept_downloads=False,
                         proxy={"server": "socks5://localhost:8080"} if model_name == "solar" else None,
                         args=[
                             "--disable-dev-shm-usage",
