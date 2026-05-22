@@ -37,6 +37,7 @@ CNU_PW = os.getenv("CNU_PW", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "solar-open")
+USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
 
 MAX_STEPS = 20
 SLEEP_BETWEEN_TASKS = 3
@@ -291,7 +292,7 @@ async def main():
                         headless=True,
                         viewport={"width": 1920, "height": 1080},
                         downloads_path=download_path,
-                        proxy={"server": "socks5://localhost:8080"} if model_name == "solar" else None,
+                        proxy={"server": "socks5://localhost:8080"} if USE_PROXY else None,
                         args=[
                             "--disable-dev-shm-usage",
                             "--no-sandbox",
