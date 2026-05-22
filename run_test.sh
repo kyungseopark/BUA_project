@@ -1,6 +1,6 @@
 #!/bin/bash
 MODEL=${1:-solar}
-SITES=(approva)
+SITES=(approval)
 
 for SITE in "${SITES[@]}"; do
     echo "=========================================="
