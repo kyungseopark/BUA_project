@@ -307,7 +307,10 @@ async def main():
                 await browser_session.start()
 
                 if start_url:
-                    await browser_session.navigate_to(start_url)
+                    try:
+                        await browser_session.navigate_to(start_url)
+                    except Exception:
+                        pass
                     await asyncio.sleep(3)
 
                 result = await run_task(
