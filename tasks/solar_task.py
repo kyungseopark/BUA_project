@@ -163,6 +163,7 @@ SITE_TASKS = [
         "start_url": "https://cnu.korus.ac.kr/",
         "base_context": (
             "충남대학교 전자결재 시스템에 접속되어 있습니다.\n"
+            "로그인이 필요하면 아이디 {{cnu_tid}}, 비밀번호 {{cnu_tpw}}로 로그인하세요.\n"
         ),
         "tasks": [
             "비전자 일괄결재 검토",
