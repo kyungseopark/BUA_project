@@ -160,7 +160,7 @@ SITE_TASKS = [
     {
         "site_id": "approval",
         "site_name": "전자결재",
-        "start_url": "",  
+        "start_url": "https://cnu.korus.ac.kr/",
         "base_context": (
             "충남대학교 전자결재 시스템에 접속되어 있습니다.\n"
         ),
