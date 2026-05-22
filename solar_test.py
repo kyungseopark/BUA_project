@@ -34,6 +34,8 @@ load_dotenv()
 
 CNU_ID = os.getenv("CNU_ID", "")
 CNU_PW = os.getenv("CNU_PW", "")
+TEST_CNU_ID = os.getenv("TEST_CNU_ID", "")
+TEST_CNU_PW = os.getenv("TEST_CNU_PW", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "solar-open")
@@ -252,6 +254,8 @@ async def main():
             site["base_context"]
             .replace("{{cnu_id}}", CNU_ID)
             .replace("{{cnu_pw}}", CNU_PW)
+            .replace("{{cnu_tid}}", TEST_CNU_ID)
+            .replace("{{cnu_tpw}}", TEST_CNU_PW)
         )
         tasks = site["tasks"]
 
