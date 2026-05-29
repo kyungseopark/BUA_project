@@ -11,3 +11,4 @@ wheels/
 data/
 .env
 demo/
+results_combined.xlsx
