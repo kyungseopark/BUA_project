@@ -36,7 +36,7 @@ TEST_CNU_PW = os.getenv("TEST_CNU_PW", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8003/v1")
 EXAONE_MODEL = os.getenv("EXAONE_MODEL", "exaone-32b")
-USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
+USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
 
 MAX_STEPS = 30
 SLEEP_BETWEEN_TASKS = 3
